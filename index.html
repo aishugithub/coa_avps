@@ -15,7 +15,7 @@
        which appends it as a row in the professor's Google Sheet.
 
   HOW THE PIECES FIT TOGETHER:
-    [this page on GitHub Pages]  --(POST JSON)-->  [Apps Script Web App]  -->  [Google Sheet]
+    [this page on GitHub Pages]  --(POST JSON) > [Apps Script Web App]  >  [Google Sheet]
     The AVPS simulator itself lives separately at AVPS_URL; students open it in
     another tab, do the stepping-through there, and report what they see here.
     The Session ID links a student's answers here to their real tutor-usage
@@ -188,7 +188,7 @@
 const CONFIG = {
   // Paste the Web App URL from deploying Code.gs (see SETUP.md). It looks like
   // https://script.google.com/macros/s/AKfy....../exec
-  APPS_SCRIPT_URL: "PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE",
+  APPS_SCRIPT_URL: "https://script.google.com/macros/s/AKfycbyjf7sd6zB5RcVmBBKhJQxHjxiHknxZ-KxC4IrYz7bKINn4p-WFfJm3MHU7WHxctjcnSA/exec",
   // The live AVPS simulator students open in a second tab.
   AVPS_URL: "https://avps-deploy.vercel.app/"
 };
