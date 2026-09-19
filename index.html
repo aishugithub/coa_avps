@@ -1,29 +1,32 @@
 <!DOCTYPE html>
 <!--
   ============================================================================
-  AVPS PIPELINE HAZARDS — COHORT ASSIGNMENT (student-facing front-end)
+  AVPS PIPELINE HAZARDS — COHORT ASSIGNMENT (v2, randomized + auto-scored)
   ============================================================================
   WHAT THIS FILE IS (big picture):
-  A single-page assignment that ~400 B.Tech students open in the browser. It:
-    1. Asks who they are (Register Number + Name) and for their AVPS Session ID.
-    2. Deterministically assigns each student a specific practice program in
-       each of three hazard families, DERIVED FROM THEIR REGISTER NUMBER (so
-       sets are evenly spread and can't be gamed by self-selection).
-    3. Walks them through three MCQ-only sections (Data/RAW, Load-Use, Control),
-       7 questions each, plus a short feedback screen.
-    4. On submit, POSTs one flat JSON record to a Google Apps Script Web App,
-       which appends it as a row in the professor's Google Sheet.
+  A single-page assignment ~400 students open in the browser. Per student it:
+    1. Collects identity (Register Number + Name + AVPS Session ID).
+    2. Deterministically assigns, FROM THE REGISTER NUMBER:
+         - which of {data, load} is shown as a built-in EXAMPLE and which as a
+           self-typed CUSTOM program (the "swap" — everyone does both types),
+         - which CONTROL built-in (Example 4 / 5 / Patterson C.4),
+         - the ORDER the three sections appear in (varies student to student).
+    3. Presents three sections, each 5 observation MCQs (answerable by looking
+       at the running simulator or asking the tutor) + 1 "did it help?" question.
+       NO prediction questions.
+    4. POSTs one flat JSON record to a Google Apps Script Web App, which appends
+       it to a Google Sheet AND auto-scores the 5 factual questions per section.
+
+  WHY "derive everything from the register number" instead of Math.random:
+    it must be STABLE if the student refreshes mid-assignment, and REPRODUCIBLE
+    so the professor can re-derive any student's assignment when checking. It is
+    still well spread across the cohort.
 
   HOW THE PIECES FIT TOGETHER:
-    [this page on GitHub Pages]  --(POST JSON) > [Apps Script Web App]  >  [Google Sheet]
-    The AVPS simulator itself lives separately at AVPS_URL; students open it in
-    another tab, do the stepping-through there, and report what they see here.
-    The Session ID links a student's answers here to their real tutor-usage
-    logs on the AVPS backend (that ID is shown on the AVPS page).
+    [this page on GitHub Pages] --POST JSON--> [Code.gs Web App] --> [Google Sheet + scores]
+    Students open the AVPS simulator (AVPS_URL) in a second tab to do the work.
 
-  IMPORTANT — ONE THING TO FILL IN BEFORE GOING LIVE:
-    Set CONFIG.APPS_SCRIPT_URL below to the Web App URL you get when you deploy
-    Code.gs (see SETUP.md). Until you do, submissions have nowhere to go.
+  BEFORE GOING LIVE: set CONFIG.APPS_SCRIPT_URL (see SETUP.md).
   ============================================================================
 -->
 <html lang="en">
@@ -32,122 +35,61 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AVPS Pipeline Hazards — Assignment</title>
 <style>
-  /* ---- Design tokens: one place to change the look. Matches the AVPS app's
-         blue accent (#2c6fb8) and a warm, low-glare cream background. ---- */
   :root {
-    --blue: #2c6fb8;
-    --blue-dark: #245c99;
-    --ink: #1c2430;
-    --muted: #5c6672;
-    --cream: #f7f6f3;
-    --card: #ffffff;
-    --line: #e3e0da;
-    --ok: #2f8a3c;
-    --chip: #eef4fb;
-    --chip-line: #b9d4ef;
-    --radius: 12px;
+    --blue:#2c6fb8; --blue-dark:#245c99; --ink:#1c2430; --muted:#5c6672;
+    --cream:#f7f6f3; --card:#ffffff; --line:#e3e0da; --ok:#2f8a3c;
+    --chip:#eef4fb; --chip-line:#b9d4ef; --radius:12px;
   }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    background: var(--cream);
-    color: var(--ink);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    line-height: 1.55;
-  }
-  /* Center everything in a readable column. */
-  .wrap { max-width: 760px; margin: 0 auto; padding: 24px 16px 64px; }
-
-  /* Header band with the assignment title. */
-  header.top { text-align: center; margin-bottom: 8px; }
-  header.top h1 { font-size: 22px; margin: 0 0 4px; }
-  header.top .sub { color: var(--muted); font-size: 14px; }
-
-  /* Progress strip: shows which of the 5 screens the student is on. */
-  .steps { display: flex; gap: 6px; justify-content: center; margin: 18px 0 24px; flex-wrap: wrap; }
-  .step { font-size: 12px; color: var(--muted); padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: #fff; }
-  .step.active { color: #fff; background: var(--blue); border-color: var(--blue); font-weight: 600; }
-  .step.done { color: var(--ok); border-color: #bfe0c4; background: #f0f9f1; }
-
-  /* Cards hold each screen's content. */
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px; margin-bottom: 18px; }
-  .card h2 { margin: 0 0 6px; font-size: 19px; }
-  .card h3 { margin: 18px 0 6px; font-size: 15px; }
-  .lead { color: var(--muted); font-size: 14px; margin: 0 0 14px; }
-
-  /* Form fields. */
-  label.field { display: block; font-size: 14px; font-weight: 600; margin: 14px 0 6px; }
-  input[type=text] {
-    width: 100%; padding: 10px 12px; font-size: 15px;
-    border: 1px solid var(--line); border-radius: 8px; background: #fff;
-  }
-  /* The register number is forced to UPPERCASE both visually (here) and in JS,
-     so "e02-25-001" and "E02-25-001" can never land a student in two sets. */
-  input#regno { text-transform: uppercase; letter-spacing: 0.5px; }
-  .hint { font-size: 12.5px; color: var(--muted); margin-top: 5px; }
-
-  /* The assigned-program box shown at the top of each section. */
-  .program-box {
-    background: #0f172a; color: #e6edf6; border-radius: 10px;
-    padding: 14px 16px; font-family: ui-monospace, Menlo, Consolas, monospace;
-    font-size: 14px; line-height: 1.8; margin: 6px 0 4px; overflow-x: auto;
-  }
-  .program-box .pc { color: #7fb2e6; user-select: none; }
-  .assign-note { font-size: 13px; color: var(--muted); margin: 8px 0 2px; }
-
-  /* The one-time "you may use the tutor" tip. */
-  .tutor-tip {
-    background: var(--chip); border: 1px solid var(--chip-line); border-radius: 10px;
-    padding: 10px 14px; font-size: 13px; margin: 14px 0; color: #22405e;
-  }
-
-  /* A single question block. */
-  .q { padding: 14px 0; border-top: 1px solid var(--line); }
-  .q:first-of-type { border-top: none; }
-  .q .qtext { font-weight: 600; font-size: 14.5px; margin-bottom: 8px; }
-  .q .qtext .num { color: var(--blue); margin-right: 6px; }
-  /* Radio options rendered as tappable pills — friendlier on phones. */
-  .opts { display: flex; flex-wrap: wrap; gap: 8px; }
-  .opt {
-    display: inline-flex; align-items: center; gap: 7px;
-    border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px;
-    font-size: 13.5px; cursor: pointer; background: #fff; user-select: none;
-  }
-  .opt:hover { border-color: var(--blue); }
-  .opt input { accent-color: var(--blue); }
-  .opt.checked { border-color: var(--blue); background: var(--chip); }
-
-  textarea {
-    width: 100%; min-height: 64px; padding: 10px 12px; font-size: 14px;
-    border: 1px solid var(--line); border-radius: 8px; resize: vertical; font-family: inherit;
-  }
-
-  /* The humble research note on the feedback screen. */
-  .research-note {
-    background: #fffaf0; border: 1px solid #f0e2c0; border-radius: 10px;
-    padding: 14px 16px; font-size: 14px; color: #5a4a28; margin-bottom: 6px;
-  }
-
-  /* Buttons and the bottom navigation row. */
-  .nav { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; gap: 10px; }
-  button {
-    font-size: 15px; font-weight: 600; border: none; border-radius: 9px;
-    padding: 11px 20px; cursor: pointer;
-  }
-  button.primary { background: var(--blue); color: #fff; }
-  button.primary:hover { background: var(--blue-dark); }
-  button.primary:disabled { background: #9db8d6; cursor: not-allowed; }
-  button.ghost { background: #fff; color: var(--blue); border: 1px solid var(--line); }
-  .err { color: #c0392b; font-size: 13px; margin-top: 10px; min-height: 18px; }
-
-  a.avps-link { color: var(--blue); font-weight: 600; text-decoration: none; }
-  a.avps-link:hover { text-decoration: underline; }
-
-  /* Final "submitted" screen. */
-  .done-tick { font-size: 40px; text-align: center; }
-  .summary { font-size: 13.5px; color: var(--muted); background: #fafafa; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-top: 12px; }
-
-  /* Dark-mode courtesy (some students browse dark). Kept minimal. */
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--cream); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; line-height:1.55; }
+  .wrap { max-width:760px; margin:0 auto; padding:24px 16px 64px; }
+  header.top { text-align:center; margin-bottom:8px; }
+  header.top h1 { font-size:22px; margin:0 0 4px; }
+  header.top .sub { color:var(--muted); font-size:14px; }
+  .steps { display:flex; gap:6px; justify-content:center; margin:18px 0 24px; flex-wrap:wrap; }
+  .step { font-size:12px; color:var(--muted); padding:4px 10px; border-radius:999px; border:1px solid var(--line); background:#fff; }
+  .step.active { color:#fff; background:var(--blue); border-color:var(--blue); font-weight:600; }
+  .step.done { color:var(--ok); border-color:#bfe0c4; background:#f0f9f1; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:22px; margin-bottom:18px; }
+  .card h2 { margin:0 0 6px; font-size:19px; }
+  .card h3 { margin:18px 0 6px; font-size:15px; }
+  .lead { color:var(--muted); font-size:14px; margin:0 0 14px; }
+  label.field { display:block; font-size:14px; font-weight:600; margin:14px 0 6px; }
+  input[type=text] { width:100%; padding:10px 12px; font-size:15px; border:1px solid var(--line); border-radius:8px; background:#fff; }
+  input#regno { text-transform:uppercase; letter-spacing:0.5px; }
+  .hint { font-size:12.5px; color:var(--muted); margin-top:5px; }
+  .program-box { background:#0f172a; color:#e6edf6; border-radius:10px; padding:14px 16px;
+    font-family:ui-monospace,Menlo,Consolas,monospace; font-size:14px; line-height:1.8; margin:6px 0 4px; overflow-x:auto; }
+  .program-box .pc { color:#7fb2e6; user-select:none; }
+  .assign-note { font-size:13px; color:var(--muted); margin:8px 0 2px; }
+  .badge { display:inline-block; font-size:11.5px; font-weight:700; letter-spacing:.3px; padding:2px 9px; border-radius:999px; margin-bottom:6px; }
+  .badge.example { background:#eaf2fb; color:#255a94; border:1px solid #c7ddf3; }
+  .badge.custom  { background:#eef7ee; color:#2c6a34; border:1px solid #c7e6c9; }
+  .badge.control { background:#f6eefb; color:#6a2f8a; border:1px solid #e0c7f0; }
+  .tutor-tip { background:var(--chip); border:1px solid var(--chip-line); border-radius:10px; padding:10px 14px; font-size:13px; margin:14px 0; color:#22405e; }
+  .q { padding:14px 0; border-top:1px solid var(--line); }
+  .q:first-of-type { border-top:none; }
+  .q .qtext { font-weight:600; font-size:14.5px; margin-bottom:8px; }
+  .q .qtext .num { color:var(--blue); margin-right:6px; }
+  .opts { display:flex; flex-wrap:wrap; gap:8px; }
+  .opt { display:inline-flex; align-items:center; gap:7px; border:1px solid var(--line); border-radius:8px; padding:8px 12px; font-size:13.5px; cursor:pointer; background:#fff; user-select:none; }
+  .opt:hover { border-color:var(--blue); }
+  .opt input { accent-color:var(--blue); }
+  .opt.checked { border-color:var(--blue); background:var(--chip); }
+  textarea { width:100%; min-height:64px; padding:10px 12px; font-size:14px; border:1px solid var(--line); border-radius:8px; resize:vertical; font-family:inherit; }
+  .research-note { background:#fffaf0; border:1px solid #f0e2c0; border-radius:10px; padding:14px 16px; font-size:14px; color:#5a4a28; margin-bottom:6px; }
+  .nav { display:flex; justify-content:space-between; align-items:center; margin-top:8px; gap:10px; }
+  button { font-size:15px; font-weight:600; border:none; border-radius:9px; padding:11px 20px; cursor:pointer; }
+  button.primary { background:var(--blue); color:#fff; }
+  button.primary:hover { background:var(--blue-dark); }
+  button.primary:disabled { background:#9db8d6; cursor:not-allowed; }
+  button.ghost { background:#fff; color:var(--blue); border:1px solid var(--line); }
+  .err { color:#c0392b; font-size:13px; margin-top:10px; min-height:18px; }
+  a.avps-link { color:var(--blue); font-weight:600; text-decoration:none; }
+  a.avps-link:hover { text-decoration:underline; }
+  .done-tick { font-size:40px; text-align:center; }
+  .summary { font-size:13.5px; color:var(--muted); background:#fafafa; border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-top:12px; }
   @media (prefers-color-scheme: dark) {
     :root { --cream:#12161c; --card:#1a2028; --ink:#e7ebf0; --muted:#9aa5b1; --line:#2b333d; --chip:#16283c; --chip-line:#2a4a6a; }
   }
@@ -155,465 +97,349 @@
 </head>
 <body>
 <div class="wrap">
-
   <header class="top">
     <h1>Pipeline Hazards — Practice &amp; Reflection</h1>
     <div class="sub">Computer Organization &amp; Architecture · using the AVPS simulator</div>
   </header>
-
-  <!-- Progress strip; JS toggles the .active/.done classes. -->
-  <div class="steps" id="steps">
-    <div class="step" data-step="0">Start</div>
-    <div class="step" data-step="1">Data hazard</div>
-    <div class="step" data-step="2">Load-use</div>
-    <div class="step" data-step="3">Control</div>
-    <div class="step" data-step="4">Feedback</div>
-  </div>
-
-  <!-- All five screens live in the DOM; JS shows exactly one at a time. -->
+  <div class="steps" id="steps"></div>
   <div id="screen"></div>
-
   <div class="err" id="err"></div>
   <div class="nav">
     <button class="ghost" id="backBtn" onclick="goBack()" style="visibility:hidden">← Back</button>
     <button class="primary" id="nextBtn" onclick="goNext()">Start assignment →</button>
   </div>
-
 </div>
 
 <script>
 /* ==========================================================================
-   CONFIG — the only thing you MUST edit before going live.
+   CONFIG
    ========================================================================== */
 const CONFIG = {
-  // Paste the Web App URL from deploying Code.gs (see SETUP.md). It looks like
-  // https://script.google.com/macros/s/AKfy....../exec
-  APPS_SCRIPT_URL: "https://script.google.com/macros/s/AKfycbyjf7sd6zB5RcVmBBKhJQxHjxiHknxZ-KxC4IrYz7bKINn4p-WFfJm3MHU7WHxctjcnSA/exec",
-  // The live AVPS simulator students open in a second tab.
+  APPS_SCRIPT_URL: "PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE",
   AVPS_URL: "https://avps-deploy.vercel.app/"
 };
 
 /* ==========================================================================
-   QUESTION-BANK DATA
-   Each program is single-dependency by design: the dependency is ONLY between
-   instruction 1 and instruction 2; instruction 3 reads only initial registers
-   (x1..x4 / the load base), so it adds no second hazard but still exists so the
-   "what is instruction 3 doing?" timing question has an instruction 3 to ask
-   about. RAW sets expect 0 stalls; Load-Use sets expect exactly 1 stall.
+   ITEM DEFINITIONS
+   Each "item" is one thing a student runs in AVPS. Built-in examples are picked
+   from the AVPS dropdown; custom programs are typed into Custom Program mode.
+   depReg is the register that carries the dependency (verified against the
+   simulator) — used by the server to auto-score the "which register?" question.
    ========================================================================== */
+
+// Built-in DATA example: RAW fixed WITH forwarding -> 0 stalls (Hamacher 6.4).
+const DATA_EXAMPLE = {
+  id: "ex2", mode: "example", family: "data",
+  label: "Example 2", avps: "Example 2: Same Hazard, Fixed with Forwarding",
+  program: ["addi x2,x3,100", "addi x9,x2,-30"], depReg: "x2"
+};
+// Built-in LOAD example: load-use, 1 stall even with forwarding (Hamacher 6.8).
+const LOAD_EXAMPLE = {
+  id: "ex3", mode: "example", family: "load",
+  label: "Example 3", avps: "Example 3: Load-Use Hazard, Stall Despite Forwarding",
+  program: ["ld x2,0(x3)", "addi x9,x2,-30"], depReg: "x2"
+};
+
+// Custom DATA (RAW) bank — single-dependency, forwarding ON -> 0 stalls.
+// depReg is instruction 1's destination (the register the 2nd instruction reads).
 const RAW_BANK = [
-  ["add x5,x1,x2",  "sub x6,x5,x3",  "xor x7,x1,x4"],   // index 0 -> "RAW-1"
-  ["sub x8,x1,x2",  "or x9,x8,x3",   "and x10,x2,x4"],
-  ["and x11,x1,x2", "add x12,x11,x3","or x13,x1,x4"],
-  ["or x14,x1,x2",  "xor x15,x14,x3","add x16,x2,x3"],
-  ["xor x17,x1,x2", "add x18,x17,x3","sub x19,x1,x4"],
-  ["sll x20,x1,x2", "add x21,x20,x3","xor x22,x2,x4"],
-  ["srl x23,x1,x2", "and x24,x23,x3","or x25,x1,x3"],
-  ["sra x26,x1,x2", "xor x27,x26,x3","add x28,x2,x4"],
-  ["slt x29,x1,x2", "sub x30,x29,x3","and x31,x1,x4"],
-  ["addi x5,x1,10", "add x6,x5,x2",  "or x7,x3,x4"]     // index 9 -> "RAW-10"
+  { name:"RAW-1",  program:["add x5,x1,x2","sub x6,x5,x3","xor x7,x1,x4"],    depReg:"x5"  },
+  { name:"RAW-2",  program:["sub x8,x1,x2","or x9,x8,x3","and x10,x2,x4"],    depReg:"x8"  },
+  { name:"RAW-3",  program:["and x11,x1,x2","add x12,x11,x3","or x13,x1,x4"], depReg:"x11" },
+  { name:"RAW-4",  program:["or x14,x1,x2","xor x15,x14,x3","add x16,x2,x3"], depReg:"x14" },
+  { name:"RAW-5",  program:["xor x17,x1,x2","add x18,x17,x3","sub x19,x1,x4"],depReg:"x17" },
+  { name:"RAW-6",  program:["sll x20,x1,x2","add x21,x20,x3","xor x22,x2,x4"],depReg:"x20" },
+  { name:"RAW-7",  program:["srl x23,x1,x2","and x24,x23,x3","or x25,x1,x3"], depReg:"x23" },
+  { name:"RAW-8",  program:["sra x26,x1,x2","xor x27,x26,x3","add x28,x2,x4"],depReg:"x26" },
+  { name:"RAW-9",  program:["slt x29,x1,x2","sub x30,x29,x3","and x31,x1,x4"],depReg:"x29" },
+  { name:"RAW-10", program:["addi x5,x1,10","add x6,x5,x2","or x7,x3,x4"],    depReg:"x5"  }
 ];
+// Custom LOAD (load-use) bank — single-dependency, 1 stall. depReg is load dest.
 const LU_BANK = [
-  ["ld x5,0(x6)",    "add x7,x5,x2",  "and x9,x1,x3"],   // index 0 -> "LU-1"
-  ["lw x9,0(x10)",   "sub x11,x9,x3", "or x12,x1,x2"],
-  ["lh x13,0(x14)",  "and x15,x13,x4","add x16,x1,x2"],
-  ["lb x17,0(x18)",  "or x19,x17,x5", "xor x20,x1,x2"],
-  ["ld x21,8(x22)",  "xor x23,x21,x6","add x24,x1,x2"],
-  ["lw x25,4(x26)",  "add x27,x25,x7","sub x28,x1,x2"],
-  ["lh x29,2(x30)",  "sub x31,x29,x8","and x5,x1,x2"],
-  ["lb x9,1(x10)",   "and x11,x9,x2", "or x12,x1,x3"],
-  ["ld x13,16(x14)", "or x15,x13,x4", "xor x16,x1,x2"],
-  ["lw x17,12(x18)", "xor x19,x17,x6","add x20,x1,x2"]   // index 9 -> "LU-10"
+  { name:"LU-1",  program:["ld x5,0(x6)","add x7,x5,x2","and x9,x1,x3"],      depReg:"x5"  },
+  { name:"LU-2",  program:["lw x9,0(x10)","sub x11,x9,x3","or x12,x1,x2"],    depReg:"x9"  },
+  { name:"LU-3",  program:["lh x13,0(x14)","and x15,x13,x4","add x16,x1,x2"], depReg:"x13" },
+  { name:"LU-4",  program:["lb x17,0(x18)","or x19,x17,x5","xor x20,x1,x2"],  depReg:"x17" },
+  { name:"LU-5",  program:["ld x21,8(x22)","xor x23,x21,x6","add x24,x1,x2"], depReg:"x21" },
+  { name:"LU-6",  program:["lw x25,4(x26)","add x27,x25,x7","sub x28,x1,x2"], depReg:"x25" },
+  { name:"LU-7",  program:["lh x29,2(x30)","sub x31,x29,x8","and x5,x1,x2"],  depReg:"x29" },
+  { name:"LU-8",  program:["lb x9,1(x10)","and x11,x9,x2","or x12,x1,x3"],    depReg:"x9"  },
+  { name:"LU-9",  program:["ld x13,16(x14)","or x15,x13,x4","xor x16,x1,x2"], depReg:"x13" },
+  { name:"LU-10", program:["lw x17,12(x18)","xor x19,x17,x6","add x20,x1,x2"],depReg:"x17" }
 ];
-// Control hazard uses AVPS built-in examples (students pick these from the AVPS
-// dropdown rather than typing a custom program, because branches aren't
-// supported in Custom Program mode). One of three is assigned via mod 3.
-const CONTROL_EXAMPLES = [
-  { label: "Example 4",     desc: "Branch Penalty — Resolved in Execute (Hamacher Fig 6.9)" },
-  { label: "Example 5",     desc: "Same Branch — Resolved in Decode (Hamacher Fig 6.10)" },
-  { label: "Patterson C.4", desc: "Branch Hazard — Predict Not Taken (Patterson Fig C.12)" }
+// Control built-ins (verified): resolve stage + flushed-instruction count.
+const CONTROL_ITEMS = [
+  { id:"ex4",  mode:"example", family:"control", label:"Example 4",     avps:"Example 4: Branch Penalty, Resolved in Execute", resolve:"Execute", flush:"2" },
+  { id:"ex5",  mode:"example", family:"control", label:"Example 5",     avps:"Example 5: Branch Penalty, Resolved in Decode",  resolve:"Decode",  flush:"1" },
+  { id:"pat4", mode:"example", family:"control", label:"Patterson C.4", avps:"Patterson C.4: Branch Hazard, Predict Not Taken", resolve:"Decode",  flush:"1" }
 ];
 
 /* ==========================================================================
-   SET ASSIGNMENT — deterministic from the register number.
-   We strip everything but digits, read the trailing number, then:
-     RAW set   = n mod 10   (RAW-1 .. RAW-10)
-     LU set    = n mod 10   (same index, so a student's RAW and LU sets pair up)
-     Control   = n mod 3    (Example 4 / Example 5 / Patterson C.4)
-   Because it's a pure function of the (uppercased) register number, the same
-   student always gets the same programs, and sets spread evenly across 400.
+   ASSIGNMENT — deterministic from the register number.
+     seed n  = last up-to-3 digits of the register number
+     group   = even -> data is the EXAMPLE, load is CUSTOM
+               odd  -> load is the EXAMPLE, data is CUSTOM   (the "swap")
+     custom  = bank index n mod 10
+     control = n mod 3
+     order   = one of the 6 permutations of the three sections, by n mod 6
    ========================================================================== */
-function assignedSets(regnoRaw) {
-  const digits = (regnoRaw || "").replace(/\D/g, "");     // keep only 0-9
-  // Use the last 3 digits as the seed (robust to prefixes like "E02-25-").
+const ORDERS = [   // the 6 possible section orders (keys: 'data','load','control')
+  ["data","control","load"], ["load","control","data"],
+  ["data","load","control"], ["load","data","control"],
+  ["control","data","load"], ["control","load","data"]
+];
+function assign(regnoRaw) {
+  const digits = (regnoRaw || "").replace(/\D/g, "");
   const n = digits.length ? parseInt(digits.slice(-3), 10) : 0;
-  const k = n % 10;          // 0..9  -> RAW/LU index
-  const c = n % 3;           // 0..2  -> control index
-  return {
-    seed: n,
-    rawIndex: k, rawName: "RAW-" + (k + 1),   raw: RAW_BANK[k],
-    luIndex: k,  luName:  "LU-"  + (k + 1),    lu:  LU_BANK[k],
-    ctrlIndex: c, ctrl: CONTROL_EXAMPLES[c]
-  };
+  const k = n % 10;
+  const groupEven = (n % 2) === 0;
+  // Build the data and load section items per the swap.
+  const dataItem = groupEven ? DATA_EXAMPLE : Object.assign({ mode:"custom", family:"data" }, RAW_BANK[k]);
+  const loadItem = groupEven ? Object.assign({ mode:"custom", family:"load" }, LU_BANK[k]) : LOAD_EXAMPLE;
+  const controlItem = CONTROL_ITEMS[n % 3];
+  const order = ORDERS[n % 6];
+  return { seed:n, group: groupEven ? "A" : "B", order,
+           sections: { data:dataItem, load:loadItem, control:controlItem } };
 }
 
-/* Extract the distinct registers named in a program, for the "which register
-   carries the dependency?" multiple-choice. Returns e.g. ["x1","x2","x5",...]. */
+/* Distinct registers named in a program, for the "which register?" MCQ. */
 function registersIn(program) {
   const set = new Set();
-  program.forEach(line => (line.match(/x\d+/g) || []).forEach(r => set.add(r)));
-  // Sort numerically (x2 before x10) for a tidy option list.
-  return Array.from(set).sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
+  program.forEach(l => (l.match(/x\d+/g) || []).forEach(r => set.add(r)));
+  return Array.from(set).sort((a,b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
 }
 
 /* ==========================================================================
-   QUESTION TEMPLATES
-   Each section is 7 questions. Q1-Q3 are predictions (before running), Q4-Q6
-   are read off the running simulator, Q7 is a self-report of method. Q4 and Q6
-   differ slightly per hazard family, so each family supplies its own list.
-   A question is { id, text, type, options } where type is "radio" (options) or
-   "regchoice" (options generated from the assigned program's registers).
+   QUESTION TEMPLATES (5 factual MCQs + 1 "did it help?" per family).
+   All are answerable by observing the running simulator or asking the tutor.
+   The server holds the answer key; the page only renders and collects.
    ========================================================================== */
-const CONFIDENCE = ["Guessing", "Somewhat sure", "Very sure"];
-const STALLS = ["0", "1", "2", "3"];
-const HAZARD_TYPES = ["Data hazard (RAW)", "Load-use", "Control", "None"];
-const METHOD = ["I read the diagram myself", "I asked the AVPS tutor", "I guessed"];
-const STAGES5 = ["Fetch", "Decode", "Execute", "Memory", "Write-back"];
+const HAZARD_TYPES = ["Data hazard (RAW)", "Load-use hazard", "Control hazard", "No hazard"];
+const COUNTS = ["0", "1", "2", "3"];
+const HELP_TEXT = "Did the simulator help you understand this hazard better?";
+const HELP_OPTS = ["Yes, clearly", "Somewhat", "Not really", "I mainly used the AI tutor"];
 
-function dataQuestions(program) {
-  return [
-    { id: "q1_predType",  text: "Before running — what hazard type do you predict?", type: "radio", options: HAZARD_TYPES },
-    { id: "q2_conf",      text: "How confident are you in that prediction?", type: "radio", options: CONFIDENCE },
-    { id: "q3_predStall", text: "Before running — how many stall cycles do you predict?", type: "radio", options: STALLS },
-    { id: "q4_depReg",    text: "Now run it in AVPS. Which register carries the dependency between the first two instructions?", type: "regchoice" },
-    { id: "q5_actStall",  text: "How many stall cycles does the simulator actually show?", type: "radio", options: STALLS },
-    { id: "q6_tricky",    text: "At the cycle when instruction 2 enters Execute, what is instruction 3 doing?", type: "radio", options: STAGES5 },
-    { id: "q7_method",    text: "How did you arrive at your answer to the previous question?", type: "radio", options: METHOD }
+function questionsFor(family) {
+  if (family === "data") return [
+    { key:"q1", text:"What type of hazard is in this program?", options:HAZARD_TYPES },
+    { key:"q2", text:"Which register carries the dependency between the first two instructions?", type:"regchoice" },
+    { key:"q3", text:"How many stall (bubble) cycles does the pipeline show?", options:COUNTS },
+    { key:"q4", text:"How is the dependency resolved without a long stall?", options:[
+        "Forwarding from the ALU (EX) stage","Forwarding from memory (MEM)","Only by stalling","It isn't resolved"] },
+    { key:"q5", text:"Why does this program need zero stalls?", options:[
+        "Forwarding sends the result straight to the next instruction","There is no dependency","The value was already in the register file","A NOP was inserted"] },
+    { key:"help", text:HELP_TEXT, options:HELP_OPTS }
   ];
-}
-function loadUseQuestions(program) {
-  return [
-    { id: "q1_predType",  text: "Before running — what hazard type do you predict?", type: "radio", options: HAZARD_TYPES },
-    { id: "q2_conf",      text: "How confident are you in that prediction?", type: "radio", options: CONFIDENCE },
-    { id: "q3_predStall", text: "Before running — how many stall cycles do you predict?", type: "radio", options: STALLS },
-    { id: "q4_depReg",    text: "Now run it in AVPS. Which register carries the dependency between the load and the next instruction?", type: "regchoice" },
-    { id: "q5_actStall",  text: "How many stall cycles does the simulator actually show?", type: "radio", options: STALLS },
-    { id: "q6_tricky",    text: "When the dependent instruction (instruction 2) enters Execute, has the loaded value arrived yet?", type: "radio", options: ["Yes, it's ready", "No, not yet"] },
-    { id: "q7_method",    text: "How did you arrive at your answer to the previous question?", type: "radio", options: METHOD }
+  if (family === "load") return [
+    { key:"q1", text:"What type of hazard is in this program?", options:HAZARD_TYPES },
+    { key:"q2", text:"Which register holds the loaded value that the next instruction needs?", type:"regchoice" },
+    { key:"q3", text:"How many stall (bubble) cycles does the pipeline show?", options:COUNTS },
+    { key:"q4", text:"Where does the forwarded value come from?", options:[
+        "The load's memory (MEM) stage","The ALU (EX) stage","The register file","It isn't forwarded"] },
+    { key:"q5", text:"Even with forwarding, why is there still a stall?", options:[
+        "The loaded value is ready only after MEM — one cycle late","There is no forwarding hardware","A branch was mispredicted","Two instructions write the same register"] },
+    { key:"help", text:HELP_TEXT, options:HELP_OPTS }
   ];
-}
-function controlQuestions() {
+  // control
   return [
-    { id: "q1_predType",  text: "Before running — what hazard type do you predict?", type: "radio", options: HAZARD_TYPES },
-    { id: "q2_conf",      text: "How confident are you in that prediction?", type: "radio", options: CONFIDENCE },
-    { id: "q3_predPen",   text: "Before running — how many instructions do you predict get flushed (the branch penalty)?", type: "radio", options: STALLS },
-    { id: "q4_stage",     text: "Now run it in AVPS. In which stage is the branch outcome resolved?", type: "radio", options: ["Decode", "Execute", "Memory"] },
-    { id: "q5_actPen",    text: "How many instructions does the simulator actually flush?", type: "radio", options: STALLS },
-    { id: "q6_tricky",    text: "When the branch resolves, how many already-fetched instructions are squashed?", type: "radio", options: STALLS },
-    { id: "q7_method",    text: "How did you arrive at your answer to the previous question?", type: "radio", options: METHOD }
+    { key:"q1", text:"What type of hazard does this example show?", options:HAZARD_TYPES },
+    { key:"q2", text:"In which stage is the branch resolved?", options:["Decode","Execute","Memory"] },
+    { key:"q3", text:"How many already-fetched instructions get flushed (the branch penalty)?", options:COUNTS },
+    { key:"q4", text:"Why are those instructions flushed?", options:[
+        "They were fetched before the branch outcome was known","They depend on the branch's result register","They access memory too early","They are duplicate instructions"] },
+    { key:"q5", text:"If the branch were resolved one stage earlier, the penalty would…", options:["Decrease","Increase","Stay the same"] },
+    { key:"help", text:HELP_TEXT, options:HELP_OPTS }
   ];
 }
 
 /* ==========================================================================
-   APPLICATION STATE
-   `state.answers` accumulates everything the student picks, keyed so that the
-   Sheet columns stay tidy: identity fields, then per-section answers prefixed
-   with the section key (raw_/lu_/ctrl_), then feedback fields.
+   STATE
    ========================================================================== */
-const state = {
-  screen: 0,                 // 0=identity, 1=data, 2=loaduse, 3=control, 4=feedback, 5=done
-  sets: null,                // filled once the register number is entered
-  answers: {}                // flat map of everything, becomes one Sheet row
-};
+const state = { screen:0, plan:null, answers:{} };
+// screen 0 = identity; 1,2,3 = the three sections in the assigned ORDER;
+// 4 = feedback; 5 = done.
 
 const screenEl = document.getElementById("screen");
 const errEl = document.getElementById("err");
 const nextBtn = document.getElementById("nextBtn");
 const backBtn = document.getElementById("backBtn");
+const stepsEl = document.getElementById("steps");
 
-/* Small helper: escape text before dropping it into innerHTML (defensive). */
-function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c])); }
+function esc(s){ return String(s).replace(/[&<>"]/g,c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c])); }
 
-/* Render one program's three instructions as a mono "code" box with line #s. */
-function programBox(program) {
+function programBox(program){
   return '<div class="program-box">' +
-    program.map((ln, i) => '<span class="pc">' + (i + 1) + '.</span> ' + esc(ln)).join("<br>") +
-    '</div>';
+    program.map((ln,i)=>'<span class="pc">'+(i+1)+'.</span> '+esc(ln)).join("<br>") + '</div>';
 }
 
-/* Render a list of question objects into HTML. Radio groups use the question id
-   as the input name so only one option per question can be chosen. Previously
-   chosen answers (if the student navigates back) are re-checked from state. */
-function renderQuestions(sectionKey, questions, program) {
+/* Render the question list for one section (sectionKey = data|load|control). */
+function renderQuestions(sectionKey, family, program){
+  const qs = questionsFor(family);
   let html = "";
-  questions.forEach((q, idx) => {
-    const name = sectionKey + "_" + q.id;                 // e.g. "raw_q4_depReg"
-    // Build the option list (regchoice pulls from the assigned program).
+  qs.forEach((q,idx)=>{
+    const name = sectionKey + "_" + q.key;
     const options = q.type === "regchoice" ? registersIn(program) : q.options;
-    html += '<div class="q"><div class="qtext"><span class="num">Q' + (idx + 1) + '.</span>' + esc(q.text) + '</div>';
-    html += '<div class="opts">';
-    options.forEach(opt => {
+    const label = q.key === "help" ? "" : ('<span class="num">Q'+(idx+1)+'.</span>');
+    html += '<div class="q"><div class="qtext">'+label+esc(q.text)+'</div><div class="opts">';
+    options.forEach(opt=>{
       const checked = state.answers[name] === opt ? "checked" : "";
-      const cls = checked ? "opt checked" : "opt";
-      html += '<label class="' + cls + '"><input type="radio" name="' + name + '" value="' + esc(opt) + '" ' + checked +
-              ' onchange="onPick(this)"> ' + esc(opt) + '</label>';
+      html += '<label class="opt '+(checked?"checked":"")+'"><input type="radio" name="'+name+'" value="'+esc(opt)+'" '+checked+' onchange="onPick(this)"> '+esc(opt)+'</label>';
     });
     html += '</div></div>';
   });
   return html;
 }
-
-/* When a radio is picked: store the value and repaint the pill highlight. */
-function onPick(input) {
+function onPick(input){
   state.answers[input.name] = input.value;
-  // Repaint checked state on the sibling pills of this group.
-  document.querySelectorAll('input[name="' + input.name + '"]').forEach(r => {
-    r.closest(".opt").classList.toggle("checked", r.checked);
-  });
+  document.querySelectorAll('input[name="'+input.name+'"]').forEach(r=>r.closest(".opt").classList.toggle("checked", r.checked));
   errEl.textContent = "";
 }
 
-/* ------- Screen renderers ------- */
-
-function renderIdentity() {
-  return '<div class="card">' +
-    '<h2>Before you begin</h2>' +
-    '<p class="lead">This short assignment goes with the AVPS pipeline simulator. ' +
-    'You\'ll be given three tiny programs to run and a few questions about what you observe. It takes about 15–20 minutes.</p>' +
-
+/* ---- Screen renderers ---- */
+function renderIdentity(){
+  return '<div class="card"><h2>Before you begin</h2>' +
+    '<p class="lead">This goes with the AVPS pipeline simulator. You\'ll run three short programs and answer a few questions about what you observe. About 15–20 minutes.</p>' +
     '<label class="field" for="regno">Register Number</label>' +
-    '<input type="text" id="regno" autocomplete="off" placeholder="e.g. E02-25-001" value="' + esc(state.answers.regno || "") + '" oninput="this.value=this.value.toUpperCase()">' +
-    '<div class="hint">Your practice programs are assigned automatically from this number.</div>' +
-
+    '<input type="text" id="regno" autocomplete="off" placeholder="e.g. E02-25-001" value="'+esc(state.answers.regno||"")+'" oninput="this.value=this.value.toUpperCase()">' +
+    '<div class="hint">Your programs are assigned automatically from this number.</div>' +
     '<label class="field" for="name">Name</label>' +
-    '<input type="text" id="name" autocomplete="off" placeholder="Your full name" value="' + esc(state.answers.name || "") + '">' +
-
+    '<input type="text" id="name" autocomplete="off" placeholder="Your full name" value="'+esc(state.answers.name||"")+'">' +
     '<label class="field" for="sid">AVPS Session ID</label>' +
-    '<input type="text" id="sid" autocomplete="off" placeholder="e.g. avps_xxxxxxxx_xxxxxxxx" value="' + esc(state.answers.sessionId || "") + '">' +
-    '<div class="hint">Open the simulator here → <a class="avps-link" href="' + CONFIG.AVPS_URL + '" target="_blank" rel="noopener">AVPS simulator ↗</a>. ' +
-    'Just under the title you\'ll see <b>“Your session ID”</b> — copy it here. ' +
-    '<b>Keep that same AVPS tab open</b> for the whole assignment.</div>' +
-    '</div>';
+    '<input type="text" id="sid" autocomplete="off" placeholder="e.g. avps_xxxxxxxx_xxxxxxxx" value="'+esc(state.answers.sessionId||"")+'">' +
+    '<div class="hint">Open the simulator → <a class="avps-link" href="'+CONFIG.AVPS_URL+'" target="_blank" rel="noopener">AVPS simulator ↗</a>. ' +
+    'Just under the title you\'ll see <b>“Your session ID”</b> — copy it here, and <b>keep that same AVPS tab open</b> for the whole assignment.</div></div>';
 }
 
-function renderSection(sectionKey, title, hazardName, program, isControl, questions, extraNote) {
-  let progHtml, loadNote;
-  if (isControl) {
-    // Control section points at a built-in example instead of a custom program.
-    progHtml = '<div class="program-box">' + esc(program.label) + ' — ' + esc(program.desc) + '</div>';
-    loadNote = 'In AVPS, choose <b>' + esc(program.label) + '</b> from the “Choose an example program” dropdown, then step through the cycles.';
+/* Render one hazard section. `item` carries mode (example|custom), program, etc.
+   `n` is the 1-based position in this student's order (for the "Section n" label). */
+function renderSection(sectionKey, item, n){
+  const famTitle = { data:"Data Hazard (RAW)", load:"Load-Use Hazard", control:"Control Hazard" }[sectionKey];
+  const famLead  = { data:"A read-after-write dependency between arithmetic instructions.",
+                     load:"A value loaded from memory is needed by the very next instruction.",
+                     control:"A branch changes which instruction should run next." }[sectionKey];
+  let badge, progHtml, loadNote;
+  if (item.mode === "example") {
+    badge = '<span class="badge '+(sectionKey==="control"?"control":"example")+'">Built-in example</span>';
+    progHtml = programBox(item.program || []);
+    loadNote = 'In AVPS, choose <b>'+esc(item.avps)+'</b> from the “Choose an example program” dropdown, then step through the cycles.';
   } else {
-    progHtml = programBox(program);
+    badge = '<span class="badge custom">Custom program</span>';
+    progHtml = programBox(item.program);
     loadNote = 'In AVPS, choose <b>Custom Program</b>, type the three lines above exactly, click <b>Build &amp; Load</b>, then step through the cycles.';
   }
-  return '<div class="card">' +
-    '<h2>' + esc(title) + '</h2>' +
-    '<p class="lead">' + esc(hazardName) + '</p>' +
-    '<h3>Your program</h3>' + progHtml +
-    '<div class="assign-note">' + loadNote + '</div>' +
-    // The one-time tip about the tutor (shown once per section, as agreed).
-    '<div class="tutor-tip">💡 Stuck? You may consult the AVPS AI tutor. Once you\'re satisfied with its answer, give it a 👍 (or 👎 if it didn\'t help) — that feedback feeds this research.</div>' +
-    (extraNote ? '<div class="assign-note">' + extraNote + '</div>' : '') +
-    renderQuestions(sectionKey, questions, isControl ? [] : program) +
-    '</div>';
+  return '<div class="card">' + badge +
+    '<h2>Section '+n+' — '+esc(famTitle)+'</h2>' +
+    '<p class="lead">'+esc(famLead)+'</p>' +
+    '<h3>Your program'+(item.mode==="custom"?"":" / example")+'</h3>' + progHtml +
+    '<div class="assign-note">'+loadNote+'</div>' +
+    '<div class="tutor-tip">💡 Stuck? You may consult the AVPS AI tutor. Once you\'re satisfied with its answer, give it a 👍 (or 👎) — that feedback feeds this research.</div>' +
+    renderQuestions(sectionKey, item.family, item.program || []) + '</div>';
 }
 
-function renderFeedback() {
-  return '<div class="card">' +
-    '<h2>A few quick thoughts</h2>' +
-    // The humble research note Aishu asked for — in her voice: clear, honest,
-    // no self-promotion, and genuinely asking for help.
-    '<div class="research-note">A small note before you rate: the AVPS simulator and its tutor are part of my ongoing research into building better ways to teach computer architecture. ' +
+function renderFeedback(){
+  return '<div class="card"><h2>A few quick thoughts</h2>' +
+    '<div class="research-note">A small note before you answer: the AVPS simulator and its tutor are part of my ongoing research into building better ways to teach computer architecture. ' +
     'Your honest feedback — including anything that didn\'t work or felt confusing — genuinely helps me improve these tools and support you and your classmates better. Thank you for taking a moment. 🙏</div>' +
-
-    '<div class="q"><div class="qtext"><span class="num">1.</span>How useful was the simulator for understanding these hazards?</div>' +
-    '<div class="opts" id="fb_useful"></div></div>' +
-
-    '<div class="q"><div class="qtext"><span class="num">2.</span>Did the AI tutor help you?</div>' +
-    '<div class="opts" id="fb_tutor"></div></div>' +
-
-    '<div class="q"><div class="qtext"><span class="num">3.</span>For this task, was the AVPS tutor easier to use than a general AI like ChatGPT?</div>' +
-    '<div class="opts" id="fb_vsgeneric"></div></div>' +
-
-    '<div class="q"><div class="qtext"><span class="num">4.</span>Any one thing we could improve? (optional)</div>' +
-    '<textarea id="fb_comment" placeholder="Optional — one line is plenty" oninput="state.answers.fb_comment=this.value">' + esc(state.answers.fb_comment || "") + '</textarea></div>' +
-    '</div>';
+    '<div class="q"><div class="qtext"><span class="num">1.</span>For this task, was the AVPS tutor easier to use than a general AI like ChatGPT?</div><div class="opts" id="fb_vsgeneric"></div></div>' +
+    '<div class="q"><div class="qtext"><span class="num">2.</span>Any one thing we could improve? (optional)</div>' +
+    '<textarea id="fb_comment" placeholder="Optional — one line is plenty" oninput="state.answers.fb_comment=this.value">'+esc(state.answers.fb_comment||"")+'</textarea></div></div>';
 }
-
-function renderDone() {
-  const s = state.sets;
-  return '<div class="card">' +
-    '<div class="done-tick">✓</div>' +
+function paintFeedbackOptions(){
+  const opts = ["Yes, much easier","Somewhat easier","No difference","It was harder","I didn't use either"];
+  const box = document.getElementById("fb_vsgeneric");
+  if (!box) return;
+  box.innerHTML = opts.map(o=>{
+    const checked = state.answers.fb_vsgeneric === o ? "checked" : "";
+    return '<label class="opt '+(checked?"checked":"")+'"><input type="radio" name="fb_vsgeneric" value="'+esc(o)+'" '+checked+' onchange="onPick(this)"> '+esc(o)+'</label>';
+  }).join("");
+}
+function renderDone(){
+  const p = state.plan;
+  const secList = p.order.map(k => k + " (" + p.sections[k].label + ")").join(" → ");
+  return '<div class="card"><div class="done-tick">✓</div>' +
     '<h2 style="text-align:center">Submitted — thank you!</h2>' +
     '<p class="lead" style="text-align:center">Your responses have been recorded. You may close this tab.</p>' +
-    '<div class="summary">' +
-    'Register: <b>' + esc(state.answers.regno) + '</b><br>' +
-    'Assigned sets: <b>' + esc(s.rawName) + '</b>, <b>' + esc(s.luName) + '</b>, <b>' + esc(s.ctrl.label) + '</b><br>' +
-    'Session ID: <b>' + esc(state.answers.sessionId || "(not provided)") + '</b>' +
-    '</div></div>';
+    '<div class="summary">Register: <b>'+esc(state.answers.regno)+'</b><br>Your sections: <b>'+esc(secList)+'</b><br>Session ID: <b>'+esc(state.answers.sessionId||"(not provided)")+'</b></div></div>';
 }
 
-/* Feedback screen uses scale/enum pills; render them after the card is in DOM. */
-function paintFeedbackOptions() {
-  const groups = {
-    fb_useful: ["1 — not useful", "2", "3", "4", "5 — very useful"],
-    fb_tutor: ["A lot", "Somewhat", "Not really", "I didn't use it"],
-    fb_vsgeneric: ["Yes, much easier", "Somewhat easier", "No difference", "It was harder"]
-  };
-  Object.keys(groups).forEach(gid => {
-    const box = document.getElementById(gid);
-    if (!box) return;
-    box.innerHTML = groups[gid].map(opt => {
-      const checked = state.answers[gid] === opt ? "checked" : "";
-      const cls = checked ? "opt checked" : "opt";
-      return '<label class="' + cls + '"><input type="radio" name="' + gid + '" value="' + esc(opt) + '" ' + checked +
-             ' onchange="onPick(this)"> ' + esc(opt) + '</label>';
-    }).join("");
-  });
+/* Progress strip labels adapt to this student's order. */
+function paintSteps(){
+  let labels = ["Start"];
+  if (state.plan) state.plan.order.forEach(k => labels.push({data:"Data",load:"Load-use",control:"Control"}[k]));
+  else labels.push("Section 1","Section 2","Section 3");
+  labels.push("Feedback");
+  stepsEl.innerHTML = labels.map((L,i)=>{
+    const cls = i===state.screen ? "step active" : (i<state.screen ? "step done" : "step");
+    return '<div class="'+cls+'">'+esc(L)+'</div>';
+  }).join("");
 }
 
-/* ------- Screen controller: paints the right screen and updates chrome. ------- */
-function render() {
-  // Paint the progress strip.
-  document.querySelectorAll(".step").forEach(el => {
-    const n = parseInt(el.dataset.step);
-    el.classList.toggle("active", n === state.screen);
-    el.classList.toggle("done", n < state.screen);
-  });
-
-  if (state.screen === 0) {
-    screenEl.innerHTML = renderIdentity();
-    nextBtn.textContent = "Start assignment →";
-  } else if (state.screen === 1) {
-    const s = state.sets;
-    screenEl.innerHTML = renderSection("raw", "Section 1 — Data Hazard (RAW)", "A read-after-write dependency between two arithmetic instructions.", s.raw, false, dataQuestions(s.raw));
-    nextBtn.textContent = "Next: Load-use →";
-  } else if (state.screen === 2) {
-    const s = state.sets;
-    screenEl.innerHTML = renderSection("lu", "Section 2 — Load-Use Hazard", "A value loaded from memory is needed by the very next instruction.", s.lu, false, loadUseQuestions(s.lu));
-    nextBtn.textContent = "Next: Control →";
-  } else if (state.screen === 3) {
-    const s = state.sets;
-    screenEl.innerHTML = renderSection("ctrl", "Section 3 — Control Hazard", "A branch changes which instruction should run next.", s.ctrl, true, controlQuestions());
-    nextBtn.textContent = "Next: Feedback →";
-  } else if (state.screen === 4) {
-    screenEl.innerHTML = renderFeedback();
-    paintFeedbackOptions();
-    nextBtn.textContent = "Submit ✓";
-  } else if (state.screen === 5) {
-    screenEl.innerHTML = renderDone();
-    nextBtn.style.display = "none";
-    backBtn.style.visibility = "hidden";
-    return;
+function render(){
+  paintSteps();
+  if (state.screen === 0) { screenEl.innerHTML = renderIdentity(); nextBtn.textContent = "Start assignment →"; }
+  else if (state.screen >= 1 && state.screen <= 3) {
+    const sectionKey = state.plan.order[state.screen - 1];         // which family this position shows
+    screenEl.innerHTML = renderSection(sectionKey, state.plan.sections[sectionKey], state.screen);
+    nextBtn.textContent = state.screen === 3 ? "Next: Feedback →" : "Next →";
   }
-
-  // Back button visible on every screen except the first.
+  else if (state.screen === 4) { screenEl.innerHTML = renderFeedback(); paintFeedbackOptions(); nextBtn.textContent = "Submit ✓"; }
+  else if (state.screen === 5) { screenEl.innerHTML = renderDone(); nextBtn.style.display = "none"; backBtn.style.visibility = "hidden"; return; }
   backBtn.style.visibility = state.screen === 0 ? "hidden" : "visible";
   errEl.textContent = "";
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  window.scrollTo({ top:0, behavior:"smooth" });
 }
 
-/* ------- Validation for each screen before advancing. ------- */
-function validateCurrent() {
-  if (state.screen === 0) {
-    // Read the three identity fields straight from the inputs.
-    const regno = (document.getElementById("regno").value || "").trim().toUpperCase();
-    const name = (document.getElementById("name").value || "").trim();
-    const sid = (document.getElementById("sid").value || "").trim();
+/* ---- Validation ---- */
+function validateCurrent(){
+  if (state.screen === 0){
+    const regno = (document.getElementById("regno").value||"").trim().toUpperCase();
+    const name  = (document.getElementById("name").value||"").trim();
+    const sid   = (document.getElementById("sid").value||"").trim();
     if (!regno) return "Please enter your Register Number.";
-    if (!name) return "Please enter your name.";
-    if (!sid) return "Please paste your AVPS Session ID (open the simulator, it's under the title).";
-    // Persist and compute the assigned sets from the (uppercased) register no.
-    state.answers.regno = regno;
-    state.answers.name = name;
-    state.answers.sessionId = sid;
-    state.sets = assignedSets(regno);
-    // Record the assignment itself so it lands in the Sheet as columns.
-    state.answers.rawSet = state.sets.rawName;
-    state.answers.luSet = state.sets.luName;
-    state.answers.controlSet = state.sets.ctrl.label;
+    if (!name)  return "Please enter your name.";
+    if (!sid)   return "Please paste your AVPS Session ID (open the simulator; it's under the title).";
+    state.answers.regno = regno; state.answers.name = name; state.answers.sessionId = sid;
+    state.plan = assign(regno);
+    // Record the assignment so it lands in the Sheet (and lets the server score).
+    state.answers.group = state.plan.group;
+    state.answers.order = state.plan.order.join(">");
+    state.answers.dataMode = state.plan.sections.data.mode;
+    state.answers.dataItem = state.plan.sections.data.id || state.plan.sections.data.name;
+    state.answers.loadMode = state.plan.sections.load.mode;
+    state.answers.loadItem = state.plan.sections.load.id || state.plan.sections.load.name;
+    state.answers.controlItem = state.plan.sections.control.id;
     return null;
   }
-  // Sections 1-3: every one of the 7 questions must be answered.
-  if (state.screen >= 1 && state.screen <= 3) {
-    const key = ["raw", "lu", "ctrl"][state.screen - 1];
-    const qs = state.screen === 3 ? controlQuestions()
-             : state.screen === 2 ? loadUseQuestions(state.sets.lu)
-             : dataQuestions(state.sets.raw);
-    for (const q of qs) {
-      if (!state.answers[key + "_" + q.id]) return "Please answer all questions before continuing.";
-    }
+  if (state.screen >= 1 && state.screen <= 3){
+    const sectionKey = state.plan.order[state.screen - 1];
+    const qs = questionsFor(state.plan.sections[sectionKey].family);
+    for (const q of qs) if (!state.answers[sectionKey + "_" + q.key]) return "Please answer all questions before continuing.";
     return null;
   }
-  // Feedback: the three scale questions are required; the comment is optional.
-  if (state.screen === 4) {
-    if (!state.answers.fb_useful || !state.answers.fb_tutor || !state.answers.fb_vsgeneric)
-      return "Please answer the three rating questions.";
-    return null;
-  }
+  if (state.screen === 4){ if (!state.answers.fb_vsgeneric) return "Please answer the comparison question."; return null; }
   return null;
 }
+function goNext(){ const p = validateCurrent(); if (p){ errEl.textContent = p; return; } if (state.screen === 4){ submit(); return; } state.screen++; render(); }
+function goBack(){ if (state.screen === 0) return; state.screen--; render(); }
 
-function goNext() {
-  const problem = validateCurrent();
-  if (problem) { errEl.textContent = problem; return; }
-  if (state.screen === 4) { submit(); return; }   // last content screen -> submit
-  state.screen++;
-  render();
-}
-function goBack() {
-  if (state.screen === 0) return;
-  state.screen--;
-  render();
-}
-
-/* ==========================================================================
-   SUBMIT — send one flat JSON record to the Apps Script Web App.
-   WHY text/plain + no-cors: a POST with Content-Type text/plain is a "simple
-   request", so the browser sends it WITHOUT a CORS preflight that Apps Script
-   can't answer. We can't read the response body under no-cors, so we treat a
-   resolved fetch as success and a rejected fetch (network failure) as an error
-   the student can retry. The button is disabled during send to avoid dupes.
-   ========================================================================== */
-async function submit() {
-  errEl.textContent = "";
-  nextBtn.disabled = true;
-  nextBtn.textContent = "Submitting…";
-
-  // Assemble the record. Everything the student touched already lives in
-  // state.answers under tidy keys; we add a client timestamp for ordering.
-  const record = Object.assign({
-    submittedAt: new Date().toISOString(),
-    userAgent: navigator.userAgent
-  }, state.answers);
-
-  if (CONFIG.APPS_SCRIPT_URL.indexOf("PASTE_YOUR") === 0) {
-    // Guard: someone forgot to wire up the backend URL.
-    nextBtn.disabled = false;
-    nextBtn.textContent = "Submit ✓";
-    errEl.textContent = "This form isn't connected yet (APPS_SCRIPT_URL not set). Please tell your professor.";
-    return;
+/* ---- Submit (fire-and-forget text/plain POST; see previous notes) ---- */
+async function submit(){
+  errEl.textContent = ""; nextBtn.disabled = true; nextBtn.textContent = "Submitting…";
+  const record = Object.assign({ submittedAt:new Date().toISOString(), userAgent:navigator.userAgent }, state.answers);
+  if (CONFIG.APPS_SCRIPT_URL.indexOf("PASTE_YOUR") === 0){
+    nextBtn.disabled = false; nextBtn.textContent = "Submit ✓";
+    errEl.textContent = "This form isn't connected yet (APPS_SCRIPT_URL not set). Please tell your professor."; return;
   }
-
   try {
-    await fetch(CONFIG.APPS_SCRIPT_URL, {
-      method: "POST",
-      mode: "no-cors",                                   // fire-and-forget write
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(record)                       // Apps Script reads e.postData.contents
-    });
-    // Under no-cors the promise resolves once the request is sent. Treat as done.
-    state.screen = 5;
-    render();
-  } catch (e) {
-    // Only true network failures land here. Let them retry without losing data.
-    nextBtn.disabled = false;
-    nextBtn.textContent = "Submit ✓";
+    await fetch(CONFIG.APPS_SCRIPT_URL, { method:"POST", mode:"no-cors",
+      headers:{ "Content-Type":"text/plain;charset=utf-8" }, body:JSON.stringify(record) });
+    state.screen = 5; render();
+  } catch(e){
+    nextBtn.disabled = false; nextBtn.textContent = "Submit ✓";
     errEl.textContent = "Couldn't submit — please check your connection and try again. (Your answers are still here.)";
   }
 }
 
-/* Kick things off. */
 render();
 </script>
 </body>
