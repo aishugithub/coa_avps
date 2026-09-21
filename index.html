@@ -48,7 +48,7 @@
   header.top h1 { font-size:22px; margin:0 0 4px; }
   header.top .sub { color:var(--muted); font-size:14px; }
   .steps { display:flex; gap:6px; justify-content:center; margin:18px 0 24px; flex-wrap:wrap; }
-  .step { font-size:12px; color:var(--muted); padding:4px 10px; border-radius:999px; border:1px solid var(--line); background:#fff; }
+  .step { font-size:12px; color:var(--muted); padding:4px 10px; border-radius:999px; border:1px solid var(--line); background:var(--card); }
   .step.active { color:#fff; background:var(--blue); border-color:var(--blue); font-weight:600; }
   .step.done { color:var(--ok); border-color:#bfe0c4; background:#f0f9f1; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:22px; margin-bottom:18px; }
@@ -56,7 +56,7 @@
   .card h3 { margin:18px 0 6px; font-size:15px; }
   .lead { color:var(--muted); font-size:14px; margin:0 0 14px; }
   label.field { display:block; font-size:14px; font-weight:600; margin:14px 0 6px; }
-  input[type=text] { width:100%; padding:10px 12px; font-size:15px; border:1px solid var(--line); border-radius:8px; background:#fff; }
+  input[type=text] { width:100%; padding:10px 12px; font-size:15px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--ink); }
   input#regno { text-transform:uppercase; letter-spacing:0.5px; }
   .hint { font-size:12.5px; color:var(--muted); margin-top:5px; }
   .program-box { background:#0f172a; color:#e6edf6; border-radius:10px; padding:14px 16px;
@@ -73,23 +73,23 @@
   .q .qtext { font-weight:600; font-size:14.5px; margin-bottom:8px; }
   .q .qtext .num { color:var(--blue); margin-right:6px; }
   .opts { display:flex; flex-wrap:wrap; gap:8px; }
-  .opt { display:inline-flex; align-items:center; gap:7px; border:1px solid var(--line); border-radius:8px; padding:8px 12px; font-size:13.5px; cursor:pointer; background:#fff; user-select:none; }
+  .opt { display:inline-flex; align-items:center; gap:7px; border:1px solid var(--line); border-radius:8px; padding:8px 12px; font-size:13.5px; cursor:pointer; background:var(--card); color:var(--ink); user-select:none; }
   .opt:hover { border-color:var(--blue); }
   .opt input { accent-color:var(--blue); }
   .opt.checked { border-color:var(--blue); background:var(--chip); }
-  textarea { width:100%; min-height:64px; padding:10px 12px; font-size:14px; border:1px solid var(--line); border-radius:8px; resize:vertical; font-family:inherit; }
+  textarea { width:100%; min-height:64px; padding:10px 12px; font-size:14px; border:1px solid var(--line); border-radius:8px; resize:vertical; font-family:inherit; background:var(--card); color:var(--ink); }
   .research-note { background:#fffaf0; border:1px solid #f0e2c0; border-radius:10px; padding:14px 16px; font-size:14px; color:#5a4a28; margin-bottom:6px; }
   .nav { display:flex; justify-content:space-between; align-items:center; margin-top:8px; gap:10px; }
   button { font-size:15px; font-weight:600; border:none; border-radius:9px; padding:11px 20px; cursor:pointer; }
   button.primary { background:var(--blue); color:#fff; }
   button.primary:hover { background:var(--blue-dark); }
   button.primary:disabled { background:#9db8d6; cursor:not-allowed; }
-  button.ghost { background:#fff; color:var(--blue); border:1px solid var(--line); }
+  button.ghost { background:var(--card); color:var(--blue); border:1px solid var(--line); }
   .err { color:#c0392b; font-size:13px; margin-top:10px; min-height:18px; }
   a.avps-link { color:var(--blue); font-weight:600; text-decoration:none; }
   a.avps-link:hover { text-decoration:underline; }
   .done-tick { font-size:40px; text-align:center; }
-  .summary { font-size:13.5px; color:var(--muted); background:#fafafa; border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-top:12px; }
+  .summary { font-size:13.5px; color:var(--muted); background:var(--cream); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-top:12px; }
   @media (prefers-color-scheme: dark) {
     :root { --cream:#12161c; --card:#1a2028; --ink:#e7ebf0; --muted:#9aa5b1; --line:#2b333d; --chip:#16283c; --chip-line:#2a4a6a; }
   }
@@ -226,7 +226,7 @@ function questionsFor(family) {
     { key:"q3", text:"How many stall (bubble) cycles does the pipeline show?", options:COUNTS },
     { key:"q4", text:"How is the dependency resolved without a long stall?", options:[
         "Forwarding from the ALU (EX) stage","Forwarding from memory (MEM)","Only by stalling","It isn't resolved"] },
-    { key:"q5", text:"Why does this program need zero stalls?", options:[
+    { key:"q5", text:"How does this program avoid stalling?", options:[
         "Forwarding sends the result straight to the next instruction","There is no dependency","The value was already in the register file","A NOP was inserted"] },
     { key:"help", text:HELP_TEXT, options:HELP_OPTS }
   ];
